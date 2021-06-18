@@ -62,6 +62,10 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.security.authentication.AccountStatusException;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2OwnerPasswordCredentialsAuthenticationToken;
 
 /**
  * A {@code Filter} for the OAuth 2.0 Token endpoint,
@@ -85,12 +89,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * @author Joe Grandja
  * @author Madhu Bhat
  * @author Daniel Garnier-Moiroux
- * @since 0.0.1
  * @see AuthenticationManager
  * @see OAuth2AuthorizationCodeAuthenticationProvider
  * @see OAuth2RefreshTokenAuthenticationProvider
  * @see OAuth2ClientCredentialsAuthenticationProvider
  * @see <a target="_blank" href="https://tools.ietf.org/html/rfc6749#section-3.2">Section 3.2 Token Endpoint</a>
+ * @since 0.0.1
  */
 public class OAuth2TokenEndpointFilter extends OncePerRequestFilter {
 	/**
@@ -119,7 +123,7 @@ public class OAuth2TokenEndpointFilter extends OncePerRequestFilter {
 	 * Constructs an {@code OAuth2TokenEndpointFilter} using the provided parameters.
 	 *
 	 * @param authenticationManager the authentication manager
-	 * @param tokenEndpointUri the endpoint {@code URI} for access token requests
+	 * @param tokenEndpointUri      the endpoint {@code URI} for access token requests
 	 */
 	public OAuth2TokenEndpointFilter(AuthenticationManager authenticationManager, String tokenEndpointUri) {
 		Assert.notNull(authenticationManager, "authenticationManager cannot be null");
@@ -130,6 +134,7 @@ public class OAuth2TokenEndpointFilter extends OncePerRequestFilter {
 		converters.add(new AuthorizationCodeAuthenticationConverter());
 		converters.add(new RefreshTokenAuthenticationConverter());
 		converters.add(new ClientCredentialsAuthenticationConverter());
+		converters.add(new OwnerPasswordCredentialsAuthenticationConverter(authenticationManager));
 		this.authorizationGrantAuthenticationConverter = new DelegatingAuthenticationConverter(converters);
 	}
 
@@ -330,6 +335,69 @@ public class OAuth2TokenEndpointFilter extends OncePerRequestFilter {
 
 			return new OAuth2ClientCredentialsAuthenticationToken(
 					clientPrincipal, requestedScopes, additionalParameters);
+		}
+	}
+
+	@Deprecated
+	/**
+	 * It is no longer recommended
+	 */
+	private static class OwnerPasswordCredentialsAuthenticationConverter implements AuthenticationConverter {
+		private final AuthenticationManager authenticationManager;
+
+		private OwnerPasswordCredentialsAuthenticationConverter(AuthenticationManager authenticationManager) {
+			this.authenticationManager = authenticationManager;
+		}
+
+		@Override
+		public Authentication convert(HttpServletRequest request) {
+			// grant_type (REQUIRED)
+			String grantType = request.getParameter(OAuth2ParameterNames.GRANT_TYPE);
+			if (!AuthorizationGrantType.PASSWORD.getValue().equals(grantType)) {
+				return null;
+			}
+
+			Authentication clientPrincipal = SecurityContextHolder.getContext().getAuthentication();
+
+			MultiValueMap<String, String> parameters = OAuth2EndpointUtils.getParameters(request);
+
+			// scope (OPTIONAL)
+			String scope = parameters.getFirst(OAuth2ParameterNames.SCOPE);
+			if (StringUtils.hasText(scope) &&
+					parameters.get(OAuth2ParameterNames.SCOPE).size() != 1) {
+				throwError(OAuth2ErrorCodes.INVALID_REQUEST, OAuth2ParameterNames.SCOPE);
+			}
+			if (StringUtils.hasText(scope)) {
+				Set<String> requestedScopes = new HashSet<>(
+						Arrays.asList(StringUtils.delimitedListToStringArray(scope, " ")));
+				Map<String, Object> additionalParameters = parameters
+						.entrySet()
+						.stream()
+						.filter(e -> !e.getKey().equals(OAuth2ParameterNames.GRANT_TYPE) &&
+								!e.getKey().equals(OAuth2ParameterNames.SCOPE))
+						.collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().get(0)));
+				return new OAuth2ClientCredentialsAuthenticationToken(clientPrincipal, requestedScopes, additionalParameters);
+			}
+
+			String username = request.getParameter(OAuth2ParameterNames.USERNAME);
+			if (StringUtils.hasText(username) &&
+					parameters.get(OAuth2ParameterNames.USERNAME).size() != 1) {
+				throwError(OAuth2ErrorCodes.INVALID_REQUEST, OAuth2ParameterNames.USERNAME);
+			}
+			String password = request.getParameter(OAuth2ParameterNames.PASSWORD);
+			if (StringUtils.hasText(password) &&
+					parameters.get(OAuth2ParameterNames.PASSWORD).size() != 1) {
+				throwError(OAuth2ErrorCodes.INVALID_REQUEST, OAuth2ParameterNames.PASSWORD);
+			}
+			Authentication userAuth = new UsernamePasswordAuthenticationToken(username, password);
+			try {
+				userAuth = authenticationManager.authenticate(userAuth);
+			} catch (AccountStatusException ase) {
+				throwError(OAuth2ErrorCodes.INVALID_REQUEST, ase.getMessage());
+			} catch (BadCredentialsException e) {
+				throwError(OAuth2ErrorCodes.INVALID_REQUEST, e.getMessage());
+			}
+			return new OAuth2OwnerPasswordCredentialsAuthenticationToken(clientPrincipal, userAuth);
 		}
 	}
 }

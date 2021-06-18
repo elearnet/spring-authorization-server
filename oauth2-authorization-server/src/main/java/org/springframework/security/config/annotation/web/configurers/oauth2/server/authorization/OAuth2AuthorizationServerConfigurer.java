@@ -67,7 +67,7 @@ import org.springframework.security.web.util.matcher.OrRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
-
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2OwnerPasswordCredentialsAuthenticationProvider;
 /**
  * An {@link AbstractHttpConfigurer} for OAuth 2.0 Authorization Server support.
  *
@@ -268,6 +268,12 @@ public final class OAuth2AuthorizationServerConfigurer<B extends HttpSecurityBui
 						getRegisteredClientRepository(builder),
 						getAuthorizationService(builder));
 		builder.authenticationProvider(postProcess(oidcClientRegistrationAuthenticationProvider));
+
+		OAuth2OwnerPasswordCredentialsAuthenticationProvider clientPasswordAuthenticationProvider =
+				new OAuth2OwnerPasswordCredentialsAuthenticationProvider(
+						getAuthorizationService(builder),
+						jwtEncoder);
+		builder.authenticationProvider(postProcess(clientPasswordAuthenticationProvider));
 
 		ExceptionHandlingConfigurer<B> exceptionHandling = builder.getConfigurer(ExceptionHandlingConfigurer.class);
 		if (exceptionHandling != null) {
